@@ -2,8 +2,14 @@ import streamlit as st
 import uuid
 from datetime import datetime
 from urllib.parse import urlencode, urlparse, urlunparse
+import os
+import traceback
+
+# optional graphing
 import networkx as nx
 import matplotlib.pyplot as plt
+
+# Firebase
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -16,22 +22,44 @@ DEFAULT_BASE_URL = "https://whispersbetav2.streamlit.app/"  # replace with your 
 BASE_URL = st.sidebar.text_input("Base URL", DEFAULT_BASE_URL)
 
 # -------------------------
-# Firebase init
+# Firebase init with graceful fallback
 # -------------------------
-if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-key.json")  # service account file
-    firebase_admin.initialize_app(cred)
+firestore_available = False
 
-db = firestore.client()
+try:
+    if not firebase_admin._apps:
+        # prefer service account file if present
+        if os.path.exists("firebase-key.json"):
+            cred = credentials.Certificate("firebase-key.json")
+            firebase_admin.initialize_app(cred)
+        else:
+            # attempt to initialize with Application Default Credentials
+            firebase_admin.initialize_app()
+
+    db = firestore.client()
+    # quick test read to confirm connectivity (non-expensive)
+    _ = list(db.collection("_meta_test").limit(1).stream())
+    firestore_available = True
+except Exception as e:
+    # Log the traceback and show a warning in the app
+    tb = traceback.format_exc()
+    st.warning("Firestore initialization failed — running in local fallback mode.\n" + str(e))
+    st.info("If you intend to use Firestore, make sure firebase-key.json is present or ADC are configured.")
+    # Create local fallback store in session_state
+    if "local_whispers" not in st.session_state:
+        st.session_state.local_whispers = {}
 
 # -------------------------
-# Helpers
+# Helpers (works with Firestore if available, otherwise session_state fallback)
 # -------------------------
+
 def new_id():
     return str(uuid.uuid4())
 
+
 def now_iso():
     return datetime.utcnow().isoformat() + "Z"
+
 
 def make_link_for_id(base_url, wid):
     parsed = urlparse(base_url)
@@ -39,27 +67,74 @@ def make_link_for_id(base_url, wid):
     new_query = urlencode(query)
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path or "/", "", new_query, ""))
 
+
 def make_snippet(message, wid, base_url):
     link = make_link_for_id(base_url, wid)
     return f"{message}\nRemix here → {link}"
 
+
+# storage-aware CRUD helpers
+
 def get_whisper(wid):
-    doc = db.collection("whispers").document(wid).get()
-    return doc.to_dict() if doc.exists else None
+    if firestore_available:
+        try:
+            doc = db.collection("whispers").document(wid).get()
+            return doc.to_dict() if doc.exists else None
+        except Exception:
+            # degrade to local
+            _fallback_to_local("get_whisper")
+    # local fallback
+    return st.session_state.local_whispers.get(wid)
+
 
 def save_whisper(data):
-    db.collection("whispers").document(data["id"]).set(data)
+    if firestore_available:
+        try:
+            db.collection("whispers").document(data["id"]).set(data)
+            return
+        except Exception:
+            _fallback_to_local("save_whisper")
+    st.session_state.local_whispers[data["id"]] = data
+
 
 def update_children(parent_id, child_id):
     parent = get_whisper(parent_id)
-    if parent:
-        children = parent.get("children", [])
+    if not parent:
+        return
+    children = parent.get("children", []) or []
+    if child_id not in children:
         children.append(child_id)
-        db.collection("whispers").document(parent_id).update({"children": children})
+    parent["children"] = children
+    # persist updated parent
+    if firestore_available:
+        try:
+            db.collection("whispers").document(parent_id).update({"children": children})
+            return
+        except Exception:
+            _fallback_to_local("update_children")
+    st.session_state.local_whispers[parent_id] = parent
+
 
 def get_all_whispers():
-    docs = db.collection("whispers").stream()
-    return {doc.id: doc.to_dict() for doc in docs}
+    if firestore_available:
+        try:
+            docs = db.collection("whispers").stream()
+            return {doc.id: doc.to_dict() for doc in docs}
+        except Exception:
+            _fallback_to_local("get_all_whispers")
+    # local fallback
+    return dict(st.session_state.local_whispers)
+
+
+def _fallback_to_local(caller=""):
+    """Switch to local fallback and ensure session_state storage exists.
+    This is intentionally quiet and idempotent.
+    """
+    global firestore_available
+    firestore_available = False
+    if "local_whispers" not in st.session_state:
+        st.session_state.local_whispers = {}
+    st.warning(f"Firestore unavailable (during {caller}). Using local in-memory store for this session.")
 
 # -------------------------
 # Routing
@@ -82,6 +157,7 @@ if st.sidebar.button("🌳 Tree View"):
 # -------------------------
 # Views
 # -------------------------
+
 def render_home():
     st.title("🧵 Whisper Remix Hub")
     st.markdown("Create immutable whispers, remix them, and explore trails of meaning.")
@@ -112,10 +188,11 @@ def render_home():
 
     st.subheader("Recent whispers")
     whispers = get_all_whispers()
-    roots = [w for w in whispers.values() if w["parent"] is None]
-    for w in sorted(roots, key=lambda x: x["timestamp"], reverse=True)[:10]:
+    roots = [w for w in whispers.values() if w.get("parent") is None]
+    for w in sorted(roots, key=lambda x: x.get("timestamp", ""), reverse=True)[:10]:
         link = make_link_for_id(BASE_URL, w["id"])
         st.markdown(f"- {w['message']} (by {w.get('author') or 'Anonymous'}) → {link}")
+
 
 def render_detail(wid):
     w = get_whisper(wid)
@@ -126,7 +203,7 @@ def render_detail(wid):
     st.subheader("Whisper detail")
     st.write(f"**Message:** {w['message']}")
     st.write(f"**Author:** {w.get('author') or 'Anonymous'}")
-    st.write(f"**Timestamp:** {w['timestamp']}")
+    st.write(f"**Timestamp:** {w.get('timestamp')}")
 
     share_link = make_link_for_id(BASE_URL, wid)
     snippet = make_snippet(w["message"], wid, BASE_URL)
@@ -158,10 +235,11 @@ def render_detail(wid):
             st.experimental_set_query_params(view="detail", id=new_wid)
 
     st.markdown("#### Remixes")
-    for cid in w.get("children", []):
+    for cid in w.get("children", []) or []:
         child = get_whisper(cid)
         if child:
             st.markdown(f"- {child['message']} (by {child.get('author') or 'Anonymous'})")
+
 
 def render_browse():
     st.subheader("All whispers")
@@ -169,9 +247,10 @@ def render_browse():
     if not whispers:
         st.info("No whispers yet.")
         return
-    for w in sorted(whispers.values(), key=lambda x: x["timestamp"], reverse=True):
+    for w in sorted(whispers.values(), key=lambda x: x.get("timestamp", ""), reverse=True):
         link = make_link_for_id(BASE_URL, w["id"])
         st.markdown(f"- {w['message']} (by {w.get('author') or 'Anonymous'}) → {link}")
+
 
 def render_tree():
     st.subheader("Whisper lineage tree")
@@ -181,13 +260,15 @@ def render_tree():
         return
     G = nx.DiGraph()
     for w in whispers.values():
-        G.add_node(w["id"], label=w["message"])
-        if w["parent"]:
+        G.add_node(w["id"], label=w.get("message", "(no message)"))
+        if w.get("parent"):
             G.add_edge(w["parent"], w["id"])
     fig, ax = plt.subplots(figsize=(10, 6))
     pos = nx.spring_layout(G, seed=42)
     nx.draw(G, pos, ax=ax, with_labels=False, node_size=600, node_color="#91c9ff")
-    labels = {n: G.nodes[n]["label"][:50] for n in G.nodes}
+    labels = {n: G.nodes[n].get("label", ""): for n in G.nodes}
+    # limit label length to avoid overlap
+    labels = {n: (labels[n][:50] if labels[n] else "") for n in labels}
     nx.draw_networkx_labels(G, pos, labels=labels, font_size=8)
     st.pyplot(fig)
 
