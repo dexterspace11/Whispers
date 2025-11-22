@@ -12,14 +12,14 @@ from firebase_admin import credentials, firestore
 # -------------------------
 st.set_page_config(page_title="Whisper Remix Hub", page_icon="🧵", layout="wide")
 
-DEFAULT_BASE_URL = "https://yourapp.streamlit.app"  # replace with your deployed URL
+DEFAULT_BASE_URL = "https://whispersbetav2.streamlit.app/"  # replace with your deployed URL
 BASE_URL = st.sidebar.text_input("Base URL", DEFAULT_BASE_URL)
 
 # -------------------------
 # Firebase init
 # -------------------------
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-key.json")  # your service account file
+    cred = credentials.Certificate("firebase-key.json")  # service account file
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
@@ -69,35 +69,54 @@ current_view = params.get("view", ["home"])[0]
 current_id = params.get("id", [None])[0]
 
 # -------------------------
-# Create Whisper
+# Sidebar Navigation
 # -------------------------
-st.header("Create a new whisper")
-motif = st.text_input("Motif (🌱, 🔥, 🧵)")
-phrase = st.text_input("Message")
-author = st.text_input("Author (optional)")
-if st.button("Create whisper"):
-    if not phrase and not motif:
-        st.error("Please enter a motif and/or message.")
-    else:
-        wid = new_id()
-        message = f"{motif} {phrase}".strip()
-        whisper = {
-            "id": wid,
-            "message": message,
-            "motif": motif,
-            "phrase": phrase,
-            "parent": None,
-            "children": [],
-            "author": author or None,
-            "timestamp": now_iso(),
-        }
-        save_whisper(whisper)
-        st.success("Whisper created.")
-        st.experimental_set_query_params(view="detail", id=wid)
+st.sidebar.markdown("### Navigation")
+if st.sidebar.button("🏠 Home"):
+    st.experimental_set_query_params(view="home")
+if st.sidebar.button("📜 All Whispers"):
+    st.experimental_set_query_params(view="browse")
+if st.sidebar.button("🌳 Tree View"):
+    st.experimental_set_query_params(view="tree")
 
 # -------------------------
-# Detail / Remix view
+# Views
 # -------------------------
+def render_home():
+    st.title("🧵 Whisper Remix Hub")
+    st.markdown("Create immutable whispers, remix them, and explore trails of meaning.")
+
+    st.subheader("Create a new whisper")
+    motif = st.text_input("Motif (🌱, 🔥, 🧵)")
+    phrase = st.text_input("Message")
+    author = st.text_input("Author (optional)")
+    if st.button("Create whisper"):
+        if not phrase and not motif:
+            st.error("Please enter a motif and/or message.")
+        else:
+            wid = new_id()
+            message = f"{motif} {phrase}".strip()
+            whisper = {
+                "id": wid,
+                "message": message,
+                "motif": motif,
+                "phrase": phrase,
+                "parent": None,
+                "children": [],
+                "author": author or None,
+                "timestamp": now_iso(),
+            }
+            save_whisper(whisper)
+            st.success("Whisper created.")
+            st.experimental_set_query_params(view="detail", id=wid)
+
+    st.subheader("Recent whispers")
+    whispers = get_all_whispers()
+    roots = [w for w in whispers.values() if w["parent"] is None]
+    for w in sorted(roots, key=lambda x: x["timestamp"], reverse=True)[:10]:
+        link = make_link_for_id(BASE_URL, w["id"])
+        st.markdown(f"- {w['message']} (by {w.get('author') or 'Anonymous'}) → {link}")
+
 def render_detail(wid):
     w = get_whisper(wid)
     if not w:
@@ -144,10 +163,18 @@ def render_detail(wid):
         if child:
             st.markdown(f"- {child['message']} (by {child.get('author') or 'Anonymous'})")
 
-# -------------------------
-# Tree visualization
-# -------------------------
+def render_browse():
+    st.subheader("All whispers")
+    whispers = get_all_whispers()
+    if not whispers:
+        st.info("No whispers yet.")
+        return
+    for w in sorted(whispers.values(), key=lambda x: x["timestamp"], reverse=True):
+        link = make_link_for_id(BASE_URL, w["id"])
+        st.markdown(f"- {w['message']} (by {w.get('author') or 'Anonymous'}) → {link}")
+
 def render_tree():
+    st.subheader("Whisper lineage tree")
     whispers = get_all_whispers()
     if not whispers:
         st.info("No whispers yet.")
@@ -169,12 +196,9 @@ def render_tree():
 # -------------------------
 if current_view == "detail" and current_id:
     render_detail(current_id)
+elif current_view == "browse":
+    render_browse()
 elif current_view == "tree":
     render_tree()
 else:
-    st.subheader("Recent whispers")
-    whispers = get_all_whispers()
-    roots = [w for w in whispers.values() if w["parent"] is None]
-    for w in sorted(roots, key=lambda x: x["timestamp"], reverse=True)[:10]:
-        link = make_link_for_id(BASE_URL, w["id"])
-        st.markdown(f"- {w['message']} (by {w.get('author') or 'Anonymous'}) → {link}")
+    render_home()
