@@ -266,7 +266,7 @@ def render_tree():
     fig, ax = plt.subplots(figsize=(10, 6))
     pos = nx.spring_layout(G, seed=42)
     nx.draw(G, pos, ax=ax, with_labels=False, node_size=600, node_color="#91c9ff")
-    labels = {n: G.nodes[n].get("label", ""): for n in G.nodes}
+    labels = {n: G.nodes[n].get("label", "")[:50] for n in G.nodes}
     # limit label length to avoid overlap
     labels = {n: (labels[n][:50] if labels[n] else "") for n in labels}
     nx.draw_networkx_labels(G, pos, labels=labels, font_size=8)
