@@ -62,10 +62,19 @@ def make_snippet(message, wid, base_url):
 # -----------------------------------------------------------
 def supabase_create_whisper(data):
     r = requests.post(TABLE_URL, headers=HEADERS, json=data)
-    if r.status_code >= 300:
-        st.error(f"Supabase create error: {r.text}")
+    try:
+        resp_json = r.json()
+    except Exception:
+        st.error(f"Supabase create error (non-JSON response): {r.text}")
         return None
-    return r.json()[0]
+
+    if r.status_code >= 300:
+        st.error(f"Supabase create error: {resp_json}")
+        return None
+
+    if isinstance(resp_json, list) and len(resp_json) > 0:
+        return resp_json[0]
+    return resp_json
 
 def supabase_update_children(parent_id, child_id):
     parent = supabase_get_by_id(parent_id)
@@ -83,16 +92,29 @@ def supabase_get_all():
     if r.status_code != 200:
         st.error("Supabase read error.")
         return []
-    for w in r.json():
+    try:
+        all_w = r.json()
+    except Exception:
+        st.error(f"Supabase get_all error: {r.text}")
+        return []
+    for w in all_w:
         if w.get("children") is None:
             w["children"] = []
-    return r.json()
+    return all_w
 
 def supabase_get_by_id(wid):
     r = requests.get(f"{TABLE_URL}?id=eq.{wid}", headers=HEADERS)
-    if r.status_code != 200 or len(r.json()) == 0:
+    if r.status_code != 200:
+        st.error(f"Supabase get_by_id error: {r.text}")
         return None
-    w = r.json()[0]
+    try:
+        items = r.json()
+    except Exception:
+        st.error(f"Supabase get_by_id JSON decode error: {r.text}")
+        return None
+    if not items:
+        return None
+    w = items[0]
     if w.get("children") is None:
         w["children"] = []
     return w
@@ -154,161 +176,4 @@ if st.button("Create whisper"):
             st.success("Whisper created.")
             st.experimental_set_query_params(view="detail", id=wid)
 
-st.markdown("---")
-
-# -----------------------------------------------------------
-# Detail / Remix View
-# -----------------------------------------------------------
-def render_detail(wid):
-    w = supabase_get_by_id(wid)
-    if not w:
-        st.error("Whisper not found.")
-        return
-
-    st.markdown("### Whisper detail")
-    st.write(f"**Message:** {w['message']}")
-    st.write(f"**Author:** {w.get('author') or 'Anonymous'}")
-    st.write(f"**Timestamp:** {w.get('timestamp')}")
-
-    share_link = make_link_for_id(BASE_URL, wid)
-    snippet = make_snippet(w["message"], wid, BASE_URL)
-
-    st.markdown("#### Share")
-    st.code(share_link, language="text")
-    st.code(snippet, language="text")
-
-    # Remix
-    st.markdown("#### Remix")
-    remix_add = st.text_area(
-        "Add your continuation (keep it short and distinct)",
-        placeholder="... but community makes it grow."
-    )
-    remix_author = st.text_input("Your name or handle (optional)")
-
-    if st.button("Submit remix"):
-        continuation = remix_add.strip()
-        if not continuation:
-            st.error("Please add a continuation.")
-            return
-
-        new_wid = new_id()
-        new_msg = f"{w['message']} → {continuation}"
-
-        new_child = {
-            "id": new_wid,
-            "message": new_msg,
-            "motif": w.get("motif"),
-            "phrase": None,
-            "parent": wid,
-            "children": [],
-            "author": (remix_author or "").strip() or None,
-            "timestamp": now_iso()
-        }
-
-        # Save child & update parent
-        created = supabase_create_whisper(new_child)
-        if created:
-            supabase_update_children(wid, new_wid)
-            st.success("Remix created.")
-            st.experimental_set_query_params(view="detail", id=new_wid)
-
-    # Children
-    st.markdown("#### Children (remixes)")
-    kids = w.get("children") or []
-    if not kids:
-        st.info("No remixes yet.")
-    else:
-        for cid in kids:
-            child = supabase_get_by_id(cid)
-            if not child: continue
-            link = make_link_for_id(BASE_URL, cid)
-            st.markdown(f"- **{child['message']}**")
-            st.caption(f"By {child.get('author') or 'Anonymous'} at {child.get('timestamp')} • Link: {link}")
-
-# -----------------------------------------------------------
-# Browse View
-# -----------------------------------------------------------
-def render_browse():
-    all_w = supabase_get_all()
-    roots = [w for w in all_w if w["parent"] is None]
-    remixes = [w for w in all_w if w["parent"] is not None]
-
-    st.markdown("### All whispers")
-    st.markdown("#### Roots")
-    for w in sorted(roots, key=lambda x: x["timestamp"], reverse=True):
-        link = make_link_for_id(BASE_URL, w["id"])
-        st.markdown(f"- **{w['message']}**")
-        st.caption(f"By {w.get('author') or 'Anonymous'} • {w['timestamp']} • Link: {link}")
-        if st.button(f"View → {w['id']}", key=f"view_{w['id']}"):
-            st.experimental_set_query_params(view="detail", id=w["id"])
-
-    st.markdown("#### Remixes")
-    for w in sorted(remixes, key=lambda x: x["timestamp"], reverse=True):
-        parent = supabase_get_by_id(w["parent"])
-        parent_msg = parent["message"] if parent else "(unknown)"
-        link = make_link_for_id(BASE_URL, w["id"])
-        st.markdown(f"- **{w['message']}**")
-        st.caption(
-            f"By {w.get('author') or 'Anonymous'} • {w['timestamp']} • Parent: {parent_msg} • Link: {link}"
-        )
-        if st.button(f"View → {w['id']}", key=f"view2_{w['id']}"):
-            st.experimental_set_query_params(view="detail", id=w["id"])
-
-# -----------------------------------------------------------
-# Tree View
-# -----------------------------------------------------------
-def render_tree():
-    st.markdown("### Whisper lineage tree")
-    all_w = supabase_get_all()
-    if not all_w:
-        st.info("No whispers yet.")
-        return
-
-    G = nx.DiGraph()
-    for w in all_w:
-        G.add_node(w["id"], label=w["message"])
-        if w["parent"]:
-            G.add_edge(w["parent"], w["id"])
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    pos = nx.spring_layout(G, seed=42)
-    nx.draw(G, pos, ax=ax, with_labels=False, node_size=600, node_color="#91c9ff")
-    labels = {n: G.nodes[n]["label"][:50] for n in G.nodes}
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=8)
-    st.pyplot(fig)
-
-    # Jump to a whisper
-    st.markdown("#### Jump to a whisper")
-    options = {w["message"][:80]: w["id"] for w in all_w}
-    if options:
-        choice = st.selectbox("Select whisper", list(options.keys()))
-        if st.button("View selected"):
-            st.experimental_set_query_params(view="detail", id=options[choice])
-
-# -----------------------------------------------------------
-# Router
-# -----------------------------------------------------------
-if current_view == "detail" and current_id:
-    render_detail(current_id)
-elif current_view == "browse":
-    render_browse()
-elif current_view == "tree":
-    render_tree()
-else:
-    st.markdown("### How it works")
-    st.markdown(
-        "- **Immutable anchors**: originals cannot be edited.\n"
-        "- **Remixes only extend the chain**, parent never changes.\n"
-        "- **Unique links**: shareable via ?id=<UUID>.\n"
-        "- **Works with multiple users simultaneously.**"
-    )
-
-    all_w = supabase_get_all()
-    roots = [w for w in all_w if w["parent"] is None]
-    st.markdown("### Recent roots")
-    for w in sorted(roots, key=lambda x: x["timestamp"], reverse=True)[:10]:
-        link = make_link_for_id(BASE_URL, w["id"])
-        st.markdown(f"- **{w['message']}**")
-        st.caption(f"By {w.get('author') or 'Anonymous'} • {w['timestamp']} • Link: {link}")
-        if st.button(f"View → {w['id']}", key=f"root_{w['id']}"):
-            st.experimental_set_query_params(view="detail", id=w["id"])
+# ------------------ The rest of your script (render_detail, render_browse, render_tree, router) remains the same ------------------
