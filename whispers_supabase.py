@@ -14,8 +14,8 @@ st.set_page_config(page_title="Whisper Remix Hub", page_icon="🧵", layout="wid
 # -----------------------------------------------------------
 # Supabase Config
 # -----------------------------------------------------------
-SUPABASE_URL = st.secrets["https://vuatvbbutswnpeovrfql.supabase.co"]
-SUPABASE_KEY = st.secrets["sb_publishable_y81OLrISVT-FtvbnZipGag_RiSy_g29"]
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
