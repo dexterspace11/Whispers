@@ -30,11 +30,10 @@ HEADERS = {
 
 TABLE_URL = f"{SUPABASE_URL}/rest/v1/whispers"
 
-DEFAULT_BASE_URL = "http://localhost:8501"
-BASE_URL = st.sidebar.text_input(
-    "Base URL (used to generate share links)",
-    DEFAULT_BASE_URL
-)
+# -----------------------------------------------------------
+# Use fixed deployed URL for all anchors
+# -----------------------------------------------------------
+BASE_URL = "https://whispersbetav2.streamlit.app"
 
 # -----------------------------------------------------------
 # Helpers
@@ -43,7 +42,6 @@ def new_id():
     return str(uuid.uuid4())
 
 def now_iso():
-    # timezone-aware UTC
     return datetime.now(timezone.utc).isoformat()
 
 def build_whisper_message(motif, phrase):
@@ -71,17 +69,14 @@ def make_snippet(message, wid, base_url):
 # -----------------------------------------------------------
 def supabase_create_whisper(data):
     r = requests.post(TABLE_URL, headers=HEADERS, json=data)
-
     try:
         resp_json = r.json()
     except Exception:
         st.error(f"Supabase create error (non-JSON response): {r.text}")
         return None
-
     if r.status_code >= 300:
         st.error(f"Supabase create error: {resp_json}")
         return None
-
     if isinstance(resp_json, list) and len(resp_json) > 0:
         return resp_json[0]
     return resp_json
@@ -91,63 +86,51 @@ def supabase_update_children(parent_id, child_id):
     if not parent:
         st.error("Parent not found for updating children.")
         return
-
     children = parent.get("children") or []
     if child_id not in children:
         children.append(child_id)
-
     r = requests.patch(
         f"{TABLE_URL}?id=eq.{parent_id}",
         headers=HEADERS,
         json={"children": children}
     )
-
     if r.status_code >= 300:
         st.error(f"Supabase update children error: {r.text}")
 
 def supabase_get_all():
     r = requests.get(TABLE_URL + "?select=*", headers=HEADERS)
-
     if r.status_code != 200:
         st.error("Supabase read error.")
         return []
-
     try:
         data = r.json()
     except Exception:
         st.error(f"Supabase get_all JSON decode error: {r.text}")
         return []
-
     for w in data:
         if w.get("children") is None:
             w["children"] = []
-
     return data
 
 def supabase_get_by_id(wid):
     r = requests.get(f"{TABLE_URL}?id=eq.{wid}", headers=HEADERS)
-
     if r.status_code != 200:
         st.error("Supabase get_by_id error.")
         return None
-
     try:
         items = r.json()
     except Exception:
         st.error(f"Supabase get_by_id JSON decode error: {r.text}")
         return None
-
     if not items:
         return None
-
     w = items[0]
     if w.get("children") is None:
         w["children"] = []
-
     return w
 
 # -----------------------------------------------------------
-# URL Routing (read params safely)
+# URL Routing
 # -----------------------------------------------------------
 params = st.experimental_get_query_params()
 current_view = params.get("view", ["home"])[0]
@@ -174,26 +157,20 @@ if st.sidebar.button("Tree view"):
 # Create Whisper
 # -----------------------------------------------------------
 st.markdown("### Create a new whisper")
-
 c1, c2, c3 = st.columns([1, 2, 1])
-
 with c1:
     motif = st.text_input("Motif (optional)", placeholder="🌱 / 🔥 / 🧵")
-
 with c2:
     phrase = st.text_input("Message (short, remixable)", placeholder="Growth begins in silence.")
-
 with c3:
     author = st.text_input("Author (optional)", placeholder="Dexter")
 
 if st.button("Create whisper"):
     message = build_whisper_message(motif, phrase).strip()
-
     if not message:
         st.error("Please enter a motif and/or a message.")
     else:
         wid = new_id()
-
         whisper = {
             "id": wid,
             "message": message,
@@ -204,9 +181,7 @@ if st.button("Create whisper"):
             "author": (author.strip() if author else None),
             "timestamp": now_iso(),
         }
-
         created = supabase_create_whisper(whisper)
-
         if created:
             st.success("Whisper created.")
             st.experimental_set_query_params(view="detail", id=wid)
@@ -254,12 +229,12 @@ def view_detail(wid):
         if created:
             supabase_update_children(w.get("id"), child_id)
             st.success("Remix created.")
+            # Always anchor to deployed URL
             st.experimental_set_query_params(view="detail", id=child_id)
 
 def view_browse():
     st.subheader("All Whispers")
     all_w = supabase_get_all()
-
     for w in all_w:
         st.markdown(f"### {w.get('message')}")
         st.write(f"Author: {w.get('author')}")
@@ -270,10 +245,8 @@ def view_browse():
 
 def view_tree():
     st.subheader("Whisper Lineage Tree")
-
     all_w = supabase_get_all()
     G = nx.DiGraph()
-
     for w in all_w:
         G.add_node(w.get("id"), label=w.get("message") or "")
         for c in w.get("children", []):
@@ -281,7 +254,6 @@ def view_tree():
 
     fig = plt.figure(figsize=(12, 8))
     pos = nx.spring_layout(G, seed=42)
-
     nx.draw(
         G,
         pos,
@@ -290,10 +262,8 @@ def view_tree():
         node_color="lightblue",
         edge_color="gray"
     )
-
     labels = {n: G.nodes[n].get("label", "")[:50] for n in G.nodes}
     nx.draw_networkx_labels(G, pos, labels, font_size=8)
-
     st.pyplot(fig)
 
 # -----------------------------------------------------------
