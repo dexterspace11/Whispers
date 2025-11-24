@@ -1,6 +1,6 @@
 import streamlit as st
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse, urlunparse
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -35,7 +35,8 @@ def new_id():
     return str(uuid.uuid4())
 
 def now_iso():
-    return datetime.utcnow().isoformat() + "Z"
+    # timezone-aware per Streamlit warning
+    return datetime.now(timezone.utc).isoformat()
 
 def build_whisper_message(motif, phrase):
     motif = (motif or "").strip()
@@ -58,7 +59,7 @@ def make_snippet(message, wid, base_url):
     return f"{message}\nRemix here → {link}"
 
 # -----------------------------------------------------------
-# Supabase CRUD Functions
+# Supabase CRUD
 # -----------------------------------------------------------
 def supabase_create_whisper(data):
     r = requests.post(TABLE_URL, headers=HEADERS, json=data)
@@ -76,55 +77,67 @@ def supabase_create_whisper(data):
         return resp_json[0]
     return resp_json
 
-def supabase_update_children(parent_id, child_id):
-    parent = supabase_get_by_id(parent_id)
-    if not parent:
-        st.error("Parent not found for updating children.")
-        return
-    children = parent.get("children") or []
-    children.append(child_id)
-    r = requests.patch(f"{TABLE_URL}?id=eq.{parent_id}", headers=HEADERS, json={"children": children})
-    if r.status_code >= 300:
-        st.error(f"Supabase update children error: {r.text}")
-
 def supabase_get_all():
     r = requests.get(TABLE_URL + "?select=*", headers=HEADERS)
     if r.status_code != 200:
         st.error("Supabase read error.")
         return []
     try:
-        all_w = r.json()
+        items = r.json()
     except Exception:
         st.error(f"Supabase get_all error: {r.text}")
         return []
-    for w in all_w:
+    # normalize null children
+    for w in items:
         if w.get("children") is None:
             w["children"] = []
-    return all_w
+    return items
 
 def supabase_get_by_id(wid):
     r = requests.get(f"{TABLE_URL}?id=eq.{wid}", headers=HEADERS)
     if r.status_code != 200:
         st.error(f"Supabase get_by_id error: {r.text}")
         return None
+
     try:
         items = r.json()
     except Exception:
         st.error(f"Supabase get_by_id JSON decode error: {r.text}")
         return None
+
     if not items:
         return None
+
     w = items[0]
     if w.get("children") is None:
         w["children"] = []
     return w
 
+def supabase_update_children(parent_id, child_id):
+    parent = supabase_get_by_id(parent_id)
+    if not parent:
+        st.error("Parent not found for updating children.")
+        return
+
+    children = parent.get("children") or []
+    if child_id not in children:
+        children.append(child_id)
+
+    r = requests.patch(
+        f"{TABLE_URL}?id=eq.{parent_id}",
+        headers=HEADERS,
+        json={"children": children}
+    )
+
+    if r.status_code >= 300:
+        st.error(f"Supabase update children error: {r.text}")
+
 # -----------------------------------------------------------
-# URL Routing
+# URL Routing (updated API)
 # -----------------------------------------------------------
-params = st.experimental_get_query_params()
-current_view = params.get("view", ["home"])[0]
-current_id = params.get("id", [None])[0]
+params = st.query_params
+current_view = params.get("view", "home")
+current_id = params.get("id")
 
 # -----------------------------------------------------------
 # UI Header
@@ -137,26 +150,30 @@ st.caption("Create immutable whispers, remix by extending, and track lineage wit
 # -----------------------------------------------------------
 st.sidebar.markdown("### Navigation")
 if st.sidebar.button("Home"):
-    st.experimental_set_query_params(view="home")
+    st.query_params(view="home")
 if st.sidebar.button("All whispers"):
-    st.experimental_set_query_params(view="browse")
+    st.query_params(view="browse")
 if st.sidebar.button("Tree view"):
-    st.experimental_set_query_params(view="tree")
+    st.query_params(view="tree")
 
 # -----------------------------------------------------------
 # Create Whisper
 # -----------------------------------------------------------
 st.markdown("### Create a new whisper")
 col1, col2, col3 = st.columns([1, 2, 1])
+
 with col1:
     motif = st.text_input("Motif (optional)", placeholder="🌱 / 🔥 / 🧵")
+
 with col2:
     phrase = st.text_input("Message (short, remixable)", placeholder="Growth begins in silence.")
+
 with col3:
     author = st.text_input("Author (optional)", placeholder="Dexter")
 
 if st.button("Create whisper"):
     message = build_whisper_message(motif, phrase).strip()
+
     if not message:
         st.error("Please enter a motif and/or a message.")
     else:
@@ -165,15 +182,19 @@ if st.button("Create whisper"):
             "id": wid,
             "message": message,
             "motif": motif,
-            "phrase": phrase,
+            "phrase": phrase,          # ← fixed column must exist
             "parent": None,
             "children": [],
             "author": author.strip() if author else None,
             "timestamp": now_iso(),
         }
+
         created = supabase_create_whisper(data)
         if created:
             st.success("Whisper created.")
-            st.experimental_set_query_params(view="detail", id=wid)
+            st.query_params(view="detail", id=wid)
 
-# ------------------ The rest of your script (render_detail, render_browse, render_tree, router) remains the same ------------------
+# -----------------------------------------------------------
+# The rest of your UI functions remain unchanged
+# (render_detail, render_browse, render_tree, router)
+# -----------------------------------------------------------
