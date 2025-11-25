@@ -152,16 +152,17 @@ if st.sidebar.button("Tree view"):
     st.experimental_set_query_params(view="tree")
 
 # ---------------------------
-# Create a new root whisper
+# Create a new root whisper (author added)
 # ---------------------------
 st.markdown("### Create a new whisper")
-c1, c2 = st.columns([1, 2])
+c1, c2, c3 = st.columns([1, 2, 1])
 
 with c1:
     motif = st.text_input("Motif / Emoji (optional)", placeholder="🌱 / 🔥 / 🧵")
-
 with c2:
     phrase = st.text_input("Message (can include hashtags, links, emojis)", placeholder="Growth begins in silence.")
+with c3:
+    author = st.text_input("Author (optional)", placeholder="@YourName")
 
 if st.button("Create whisper"):
     message = build_whisper_message("", phrase).strip()
@@ -176,6 +177,7 @@ if st.button("Create whisper"):
             "phrase": phrase,
             "parent": None,
             "children": [],
+            "author": (author.strip() if author else None),
             "timestamp": now_iso(),
         }
         created = supabase_create_whisper(whisper)
@@ -186,7 +188,7 @@ if st.button("Create whisper"):
             st.experimental_set_query_params(view="detail", id=wid)
 
 # ---------------------------
-# Detail / Remix view
+# Detail / Remix view (author for remixes added)
 # ---------------------------
 def view_detail(wid):
     w = supabase_get_by_id(wid)
@@ -197,6 +199,7 @@ def view_detail(wid):
     st.subheader("Whisper Details")
     st.write(f"**Message:** {w.get('message')}")
     st.write(f"**Motif:** {w.get('motif')}")
+    st.write(f"**Author:** {w.get('author') or 'Anonymous'}")
     st.write(f"**Timestamp:** {w.get('timestamp')}")
     st.write("---")
 
@@ -207,6 +210,7 @@ def view_detail(wid):
     st.write("---")
     st.write("### Remix this Whisper")
     remix_phrase = st.text_input("Add your continuation (hashtags, links allowed)", key=f"remix_{wid}")
+    remix_author = st.text_input("Your name or handle (optional)", key=f"remix_author_{wid}")
     if st.button("Submit Remix", key=f"submit_remix_{wid}"):
         child_id = new_id()
         combined_message = build_whisper_message(w.get("message"), remix_phrase)
@@ -217,6 +221,7 @@ def view_detail(wid):
             "phrase": remix_phrase,
             "parent": w.get("id"),
             "children": [],
+            "author": (remix_author.strip() if remix_author else None),
             "timestamp": now_iso(),
         }
         created = supabase_create_whisper(new_data)
@@ -232,7 +237,9 @@ def view_detail(wid):
         child = supabase_get_by_id(cid)
         if child:
             st.markdown(f"- {child.get('message')}")
-            st.code(make_snippet(child.get("message"), child.get("id")), language="markdown")
+            # show author inline for children
+            st.caption(f"By {child.get('author') or 'Anonymous'} • {child.get('timestamp')}")
+            st.code(make_snippet(child.get('message'), child.get('id')), language="markdown")
 
 # ---------------------------
 # Browse all whispers
@@ -245,6 +252,7 @@ def view_browse():
         return
     for w in sorted(all_w, key=lambda x: x["timestamp"], reverse=True):
         st.markdown(f"- {w.get('message')}")
+        st.caption(f"By {w.get('author') or 'Anonymous'}")
         st.code(make_snippet(w.get("message"), w.get("id")), language="markdown")
 
 # ---------------------------
