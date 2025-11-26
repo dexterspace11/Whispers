@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 # =========================================================
-# Supabase Config
+# Supabase Config (keep your secrets in Streamlit secrets)
 # =========================================================
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -30,7 +30,7 @@ HEADERS = {
 
 TABLE_URL = f"{SUPABASE_URL}/rest/v1/whispers"
 
-# Your deployed Streamlit URL:
+# Your deployed Streamlit URL (anchoring)
 BASE_URL = "https://whispersbetav2.streamlit.app"
 
 
@@ -65,19 +65,20 @@ def make_link_for_id(base_url, wid):
 
 def make_snippet(message, wid, motif, base_url=BASE_URL):
     """
-    Motif must ALWAYS appear at the start of the snippet.
+    Motif always included at the start. Friendly CTA (Option C).
     """
     motif = (motif or "").strip()
     message = (message or "").strip()
 
-    # prepend motif if missing
+    # Ensure motif is at start
     if motif and not message.startswith(motif):
         formatted = f"{motif} {message}"
     else:
         formatted = message
 
     link = make_link_for_id(base_url, wid)
-    return f"{formatted}\nRemix here → {link}"
+    # Option C phrase
+    return f"{formatted}\nLet this Whisper grow — add your voice by clicking the link below 👇\n{link}"
 
 
 # =========================================================
@@ -90,11 +91,9 @@ def supabase_create_whisper(data):
     except Exception:
         st.error(f"Supabase create error (non-JSON response): {r.text}")
         return None
-
     if r.status_code >= 300:
         st.error(f"Supabase create error: {resp_json}")
         return None
-
     if isinstance(resp_json, list) and resp_json:
         return resp_json[0]
     return resp_json
@@ -105,11 +104,9 @@ def supabase_update_children(parent_id, child_id):
     if not parent:
         st.error("Parent not found for updating children.")
         return
-
     children = parent.get("children") or []
     if child_id not in children:
         children.append(child_id)
-
     r = requests.patch(
         f"{TABLE_URL}?id=eq.{parent_id}",
         headers=HEADERS,
@@ -124,13 +121,11 @@ def supabase_get_all():
     if r.status_code != 200:
         st.error("Supabase read error.")
         return []
-
     try:
         data = r.json()
     except Exception:
         st.error(f"Supabase get_all JSON decode error: {r.text}")
         return []
-
     for w in data:
         if w.get("children") is None:
             w["children"] = []
@@ -142,16 +137,13 @@ def supabase_get_by_id(wid):
     if r.status_code != 200:
         st.error("Supabase get_by_id error.")
         return None
-
     try:
         items = r.json()
     except Exception:
         st.error(f"Supabase get_by_id JSON decode error: {r.text}")
         return None
-
     if not items:
         return None
-
     w = items[0]
     if w.get("children") is None:
         w["children"] = []
@@ -186,47 +178,79 @@ if st.sidebar.button("Tree view"):
 
 
 # =========================================================
-# Create Root Whisper
+# Home: Create + Instructions
 # =========================================================
-st.markdown("### Create a new whisper")
-c1, c2, c3 = st.columns([1, 2, 1])
+def render_home():
+    st.header("Create a new Whisper")
+    c1, c2, c3 = st.columns([1, 2, 1])
 
-with c1:
-    motif = st.text_input("Motif / Emoji (optional)", placeholder="🌱 / 🔥 / 🎵")
+    with c1:
+        motif = st.text_input("Motif / Emoji (optional)", placeholder="🌱 / 🔥 / 🎵")
+    with c2:
+        phrase = st.text_input("Message (can include hashtags, links, emojis)", placeholder="Growth begins in silence.")
+    with c3:
+        author = st.text_input("Author (optional)", placeholder="@yourname")
 
-with c2:
-    phrase = st.text_input("Message", placeholder="Growth begins in silence.")
+    if st.button("Create whisper"):
+        combined_message = build_whisper_message("", phrase).strip()
+        if not combined_message:
+            st.error("Message cannot be empty.")
+        else:
+            wid = new_id()
+            whisper = {
+                "id": wid,
+                "message": combined_message,
+                "motif": motif,
+                "phrase": phrase,
+                "author": author,
+                "parent": None,
+                "children": [],
+                "timestamp": now_iso(),
+            }
+            created = supabase_create_whisper(whisper)
+            if created:
+                st.success("Whisper created.")
+                snippet = make_snippet(combined_message, wid, motif)
+                st.write("Copy-ready snippet (share this on social platforms):")
+                st.code(snippet, language="text")
+                st.experimental_set_query_params(view="detail", id=wid)
 
-with c3:
-    author = st.text_input("Author (optional)", placeholder="@username")
+    st.markdown("---")
 
+    # ---------- Instructions panel ----------
+    st.markdown("## How Whisper Works (quick guide)")
+    st.markdown(
+        """
+**What is a Whisper?**  
+A Whisper is a short message (often with an emoji motif) that other people can *remix* by adding their voice. Each remix becomes a new node in a chain that stays connected to the original idea.
 
-if st.button("Create whisper"):
-    combined_message = build_whisper_message("", phrase).strip()
+**How to create a Whisper**  
+1. Choose a motif (emoji) if you like, and write a short message.  
+2. Click **Create whisper**. A copy-ready snippet will appear — this is what you can share.
 
-    if not combined_message:
-        st.error("Message cannot be empty.")
-    else:
-        wid = new_id()
-        whisper = {
-            "id": wid,
-            "message": combined_message,
-            "motif": motif,
-            "phrase": phrase,
-            "author": author,
-            "parent": None,
-            "children": [],
-            "timestamp": now_iso(),
-        }
+**How to remix a Whisper**  
+1. Open a Whisper detail (click the link or use the app).  
+2. In **Remix this Whisper**, add your continuation (hashtags, links, emojis allowed).  
+3. Click **Submit Remix** — your remix is saved and anchored to the chain.
 
-        created = supabase_create_whisper(whisper)
-        if created:
-            st.success("Whisper created.")
+**How to copy & paste**  
+- Use the displayed **Copy-ready snippet** (click the copy icon in the code block or double-click and copy).  
+- Paste it into Facebook, Twitter/X, Messenger, email, or any place you want to share the idea.
 
-            snippet = make_snippet(combined_message, wid, motif)
-            st.code(snippet, language="text")
+**Where to paste Whispers**  
+- Social media posts (Facebook, Twitter/X, LinkedIn)  
+- Group chats, community forums, newsletters  
+- Blog posts or comments — anywhere people gather
 
-            st.experimental_set_query_params(view="detail", id=wid)
+**Why this wording?**  
+The snippet reads:  
+`<motif + full chained message>`  
+`Let this Whisper grow — add your voice by clicking the link below 👇`  
+`https://whispersbetav2.streamlit.app/?id=<uuid>&view=detail`  
+
+This phrasing invites others to *add their voice* and makes the action clear.
+        """
+    )
 
 
 # =========================================================
@@ -239,7 +263,6 @@ def view_detail(wid):
         return
 
     st.subheader("Whisper Details")
-
     st.write(f"**Message:** {w.get('message')}")
     st.write(f"**Motif:** {w.get('motif')}")
     st.write(f"**Author:** {w.get('author')}")
@@ -248,19 +271,18 @@ def view_detail(wid):
 
     # Copy snippet
     snippet = make_snippet(w.get("message"), wid, w.get("motif"))
-    st.write("Copy-ready snippet:")
+    st.write("Copy-ready snippet (share this to invite remixes):")
     st.code(snippet, language="text")
 
-    # Mix UI
+    # Remix UI
     st.write("---")
     st.write("### Remix this Whisper")
-    remix_phrase = st.text_input("Continue the message", key=f"remix_{wid}")
+    remix_phrase = st.text_input("Continue the message (hashtags, links allowed)", key=f"remix_{wid}")
     remix_author = st.text_input("Author (optional)", value=w.get("author") or "", key=f"author_{wid}")
 
     if st.button("Submit Remix", key=f"submit_{wid}"):
         child_id = new_id()
         new_message = build_whisper_message(w.get("message"), remix_phrase)
-
         new_data = {
             "id": child_id,
             "message": new_message,
@@ -271,15 +293,12 @@ def view_detail(wid):
             "children": [],
             "timestamp": now_iso(),
         }
-
         created = supabase_create_whisper(new_data)
         if created:
-            supabase_update_children(w["id"], child_id)
+            supabase_update_children(w.get("id"), child_id)
             st.success("Remix created!")
-
             snippet = make_snippet(new_message, child_id, w.get("motif"))
             st.code(snippet, language="text")
-
             st.experimental_set_query_params(view="detail", id=child_id)
 
     # Display children
@@ -287,7 +306,8 @@ def view_detail(wid):
     for cid in w.get("children", []):
         child = supabase_get_by_id(cid)
         if child:
-            st.markdown(f"- {child.get('message')}  \n**Author:** {child.get('author')}")
+            st.markdown(f"- {child.get('message')}")
+            st.caption(f"By {child.get('author') or 'Anonymous'} • {child.get('timestamp')}")
             st.code(make_snippet(child.get("message"), child.get("id"), child.get("motif")), language="text")
 
 
@@ -296,16 +316,14 @@ def view_detail(wid):
 # =========================================================
 def view_browse():
     st.subheader("All Whispers")
-
     all_w = supabase_get_all()
     if not all_w:
         st.info("No whispers found.")
         return
-
     for w in sorted(all_w, key=lambda x: x["timestamp"], reverse=True):
-        st.markdown(f"**{w.get('message')}**  \n*Author:* {w.get('author')}")
-        snippet = make_snippet(w["message"], w["id"], w.get("motif"))
-        st.code(snippet, language="text")
+        st.markdown(f"**{w.get('message')}**")
+        st.caption(f"By {w.get('author') or 'Anonymous'}")
+        st.code(make_snippet(w.get("message"), w.get("id"), w.get("motif")), language="text")
 
 
 # =========================================================
@@ -313,29 +331,18 @@ def view_browse():
 # =========================================================
 def view_tree():
     st.subheader("Whisper Lineage Tree")
-
     all_w = supabase_get_all()
     if not all_w:
         st.info("No whispers yet.")
         return
-
     G = nx.DiGraph()
     for w in all_w:
-        G.add_node(w["id"], label=w["message"])
+        G.add_node(w.get("id"), label=w.get("message"))
         for c in w.get("children", []):
-            G.add_edge(w["id"], c)
-
+            G.add_edge(w.get("id"), c)
     fig = plt.figure(figsize=(12, 8))
     pos = nx.spring_layout(G, seed=42)
-    nx.draw(
-        G,
-        pos,
-        with_labels=False,
-        node_size=900,
-        node_color="lightblue",
-        edge_color="gray",
-        arrows=True
-    )
+    nx.draw(G, pos, with_labels=False, node_size=900, node_color="lightblue", edge_color="gray", arrows=True)
     labels = {n: G.nodes[n].get("label", "")[:40] for n in G.nodes}
     nx.draw_networkx_labels(G, pos, labels, font_size=7)
     st.pyplot(fig)
@@ -351,5 +358,5 @@ elif current_view == "browse":
 elif current_view == "tree":
     view_tree()
 else:
-    st.subheader("Welcome to the Whisper Remix Hub")
-    st.write("Craft whispers, remix with others, and watch ideas evolve.")
+    # show home with instructions
+    render_home()
