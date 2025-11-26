@@ -78,7 +78,7 @@ def make_snippet(message, wid, motif, base_url=BASE_URL):
 
     link = make_link_for_id(base_url, wid)
     # Option C phrase
-    return f"{formatted}\nLet this Whisper grow — add your voice by clicking the link below 👇\n{link}"
+    return f"{formatted}\nLet this Whisper grow — add your voice by clicking the link‎: \n{link}"
 
 
 # =========================================================
